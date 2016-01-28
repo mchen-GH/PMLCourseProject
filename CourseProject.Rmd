@@ -1,0 +1,120 @@
+---
+title: "Predicting Movement Patterns Using Wearable Sensors"
+output: html_document
+date: "January 27, 2016"
+---
+## Executive Summary
+In this report I aim to build a model for predicting body movement patterns in performing dumbbell lifting exercises based on data collected from sensors mounted on subjects' body and dumbbell [1, 2]. The data were labelled into five classes: (A) correct Unilateral Dumbbell Biceps Curl movement, (B) mistake by throwing the elbows to the front, (C) mistake by lifting the dumbbell only halfway, (D) mistake by lowering the dumbbell only halfway, and (E) mistake by throwing the hips to the front. I focused on ensemble learning approach, specifically, random forest method. The resulting accuracy in testing dataset prediction was above 99.8%.
+
+## Data Exploration and Pre-processing
+
+### loading R libraries
+```{r,warning=FALSE,message=FALSE}
+library(data.table); library(caret); library(kernlab); library(randomForest)
+```
+
+### loading data
+```{r}
+d0 <- fread("pml-training.csv", sep=",", header=TRUE, na.strings="NA")
+t0 <- fread("pml-testing.csv", sep=",", header=TRUE, na.strings="NA")
+dim(d0);dim(t0)
+```
+
+### exploring data
+I inspected the data types and representative values of each column. There are many columns with large amount of NA. Here is a sampling view to show the first 25 columns.
+```{r}
+str(d0, list.len=25)
+```
+
+The detailed descriptions of the about 150 measurements of the sensor data can be found in the paper [3] and will not be repeated here. The percentage of the 5 classes in the training data is shown below.
+```{r}
+prop.table(table(d0$classe))
+```
+
+### Pre-processing data
+First, I removed features with no or very few unique values, using the nearZeroVar method in the caret package. This reduced 60 columns out of the 160.
+```{r}
+idx_nearZeroCol <- nearZeroVar(d0, saveMetrics=FALSE)
+d1 <- subset(d0, select=(-idx_nearZeroCol))
+dim(d1)
+```
+
+Then, I removed features with majority (> 60%) of the rows having NA value. This further reduced 41 columns out of 100.
+```{r}
+col_lowNA <- apply(!is.na(d1), 2, sum)>nrow(d1)*.6
+d2 <- subset(d1, select=(col_lowNA))
+dim(d2)
+```
+
+Finally, I removed the first 5 columns, because they are for record keeping purposes and irrelevant to the sensor measurements. This resulted in final 54 columns, including the target label column "classe".
+```{r}
+d3 <- subset(d2,select=6:59)
+dim(d3)
+```
+
+I split the data by 75/25 on the "classe" values for training and validation test, respectively.
+```{r}
+set.seed(37219)
+inTrain <- createDataPartition(y=d3$classe, p=0.75, list=FALSE)
+training <- d3[inTrain,]
+testing <- d3[-inTrain,]
+dim(training);dim(testing)
+```
+
+I also converted the data type of "classe" column from char to factor.
+```{r}
+training$classe <- as.factor(training$classe)
+testing$classe <- as.factor(testing$classe)
+```
+
+## Feature Selection
+Because the remaining feature count is only 53, which is not too big, I decided to let model building process automatically choose best features. 
+
+## Model Selection
+According to Kaggle, the machine learning competitions web site, the most successful predictive model for structured data is ensemble trees, including random forest method. Therefore, I decided to try random forest method first.
+
+It is worth noting that in random forests, there is no need for cross-validation to get an unbiased estimate of the test set error. It is estimated internally, during the run. [4]
+
+To avoid long running time, I first built a random forest with 100 trees, instead of the default 500 trees. As shown in the results below, the algorithm randomly selected 7 remaining features at each split to determine best feature for that split. The internal out-of-bag error estimate (similar to cross-validation) in the model building was very low, only 0.28%.
+```{r}
+fitModel <- randomForest(classe~., data=training, importance=TRUE, ntree=100)
+print(fitModel)
+```
+
+The out of sample error can be estimated by using the model to classify the validation test set. As shown below, the overall accuracy was 0.9984; therefore, the out of sample error was 0.0016, or 0.16%.
+```{r}
+predictions <- predict(fitModel, testing, type = "class")
+confusionMatrix(predictions, testing$classe)
+```
+
+Because the process above ran very fast, I decided to increase the number of trees to 500 and see how much change will occur. The results below show that the internal out-of-bag error was slightly improved to 0.25%, from 0.28%.
+```{r}
+fitModel2 <- randomForest(classe~., data=training)    # Note: ntree = 500 by default
+print(fitModel2)
+```
+
+On the other hand, the overall accuracy in predicting validation test set was slightly reduced to 0.9982, from 0.9984; therefore, out of sample error was slightly increased to 0.18%, from 0.16%.
+```{r}
+predictions2 <- predict(fitModel2, testing, type = "class")
+confusionMatrix(predictions2, testing$classe)
+```
+
+It is clear that 100 trees were as good as 500 trees in the random forests method, given this training data set. Because the accuracy of the random forest models are extremely good (>99.8%), I decided not to try other models at this stage.
+
+We can also use the varImpPlot method in the randomForest package to see the variable importance measures [4]. The order of importance may provide some insight to exercisers or physical trainers on what to look out for in performing dumbbell lifting exercises. 
+```{r, fig.width=12, fig.height=8}
+varImpPlot(fitModel)
+```
+
+## Predicting the 20 test cases
+I used the first model above to predict the 20 test cases.
+```{r}
+predictionsT <- predict(fitModel, newdata=t0)
+predictionsT
+```
+
+## References
+1. Training Dataset https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv; Testing Dataset https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+2. Weight Lifting Exercise Dataset at http://groupware.les.inf.puc-rio.br/har
+3. Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+4. https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm
